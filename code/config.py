@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from pathlib import Path
 
 # ============================================================ 路径
@@ -22,12 +23,14 @@ TRAIN_DIR = DATA_DIR / "Train"
 TEST_DIR = DATA_DIR / "Test"
 LABELS_CSV = DATA_DIR / "Train_Labels.csv"
 
-# 缓存（约 1.75 GB）置于仓库之外，不纳入版本控制
+# 缓存置于仓库之外，不纳入版本控制
 CACHE_DIR = Path(os.environ.get(
     "RAIL_CACHE_DIR", WORKSPACE_ROOT / "Subsystem3_cache"
 )).resolve()
 RAW_CACHE_DIR = CACHE_DIR / "raw_npy"
-FEATURES_TRAIN = CACHE_DIR / "features_train.pkl"
+CHANNEL_FEATURES_TRAIN = CACHE_DIR / "channel_features_train.npz"   # 逐轴箱特征（train.py 使用）
+CHANNEL_FEATURES_TEST = CACHE_DIR / "channel_features_test.npz"
+FEATURES_TRAIN = CACHE_DIR / "features_train.pkl"                   # 聚合特征表（eda.py 使用）
 FEATURES_TEST = CACHE_DIR / "features_test.pkl"
 OOF_PREDICTIONS = CACHE_DIR / "oof_predictions.csv"
 
@@ -63,6 +66,10 @@ SIDE_II_POSITIONS = (2, 4, 6, 8)
 SIDE_I_POS_IDX = tuple(p - 1 for p in SIDE_I_POSITIONS)
 SIDE_II_POS_IDX = tuple(p - 1 for p in SIDE_II_POSITIONS)
 
+# 同一轮对左右两侧的位置编号 (Side I 位置, Side II 位置)
+# 假设：相邻编号属于同一轮对；须以 03_References/Rail_Corrugation/images 中的位置分布图核对
+AXLE_PAIRS = ((1, 2), (3, 4), (5, 6), (7, 8))
+
 
 def signal_column(car: int, position: int, channel_type: str) -> int:
     """返回指定信号的 0 起始列下标；car 与 position 为 1 起始编号。"""
@@ -85,7 +92,7 @@ SUBMISSION_FILENAME = "rail_predictions.csv"
 SUBMISSION_FILE_COL = "file_id"
 SUBMISSION_PRED_COL = "prediction"
 
-# ============================================================ 特征参数（初始值，待 EDA 修订）
+# ============================================================ 特征参数（初始值，待修订）
 WELCH_NPERSEG = 2048                 # 频率分辨率约 4.88 Hz
 WELCH_NOVERLAP = WELCH_NPERSEG // 2
 FREQ_BANDS_HZ = (
@@ -98,11 +105,21 @@ WAVELENGTH_BANDS_M = (
 )
 MIN_SPEED_MPS = 1.0                  # 低于此车速时波长域特征视为无定义
 
-# ============================================================ 实验参数
+# 聚合统计量：mean / median / max / min / std，或 qXX 表示第 XX 百分位数
+AGG_STATS = ("mean", "median", "max", "std")        # 同侧 32 个轴箱上的聚合
+CONTRAST_STATS = ("mean", "median", "max")          # 两侧之差（本侧统计量 - 对侧统计量）
+PAIR_STATS = ("max", "min", "q90", "q10")           # 32 个轮对左右配对差值上的聚合
+
+# ============================================================ 建模参数
+LOW_SPEED_RULE_MPS = 1.0             # 低于此车速的文件直接判为 Normal，不进入模型
 RANDOM_SEED = 42
 CV_N_SPLITS = 5
 CV_N_REPEATS = 3
 N_JOBS = -1
+
+
+def _valid_stat(s: str) -> bool:
+    return s in ("mean", "median", "max", "min", "std") or re.fullmatch(r"q\d{1,2}", s) is not None
 
 
 def _self_check() -> None:
@@ -113,6 +130,9 @@ def _self_check() -> None:
     assert signal_column(2, 1, "vibration") == 17
     assert signal_column(8, 8, "shock") == N_COLUMNS - 1
     assert set(SIDE_I_POS_IDX) | set(SIDE_II_POS_IDX) == set(range(N_POSITIONS))
+    assert all(a in SIDE_I_POSITIONS and b in SIDE_II_POSITIONS for a, b in AXLE_PAIRS)
+    assert sorted(p for pair in AXLE_PAIRS for p in pair) == list(range(1, N_POSITIONS + 1))
+    assert all(_valid_stat(s) for s in AGG_STATS + CONTRAST_STATS + PAIR_STATS)
 
 
 if __name__ == "__main__":
@@ -122,4 +142,4 @@ if __name__ == "__main__":
         ("DATA_DIR", DATA_DIR), ("TRAIN_DIR", TRAIN_DIR), ("TEST_DIR", TEST_DIR),
         ("LABELS_CSV", LABELS_CSV), ("CACHE_DIR", CACHE_DIR), ("MODEL_DIR", MODEL_DIR),
     ]:
-        print(f"{name:<11} exists={str(path.exists()):<5} {path}")
+        print(f"{name:<11} exists={str(path.exists()):<5} {path.relative_to(WORKSPACE_ROOT)}")
