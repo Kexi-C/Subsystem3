@@ -92,23 +92,29 @@ SUBMISSION_FILENAME = "rail_predictions.csv"
 SUBMISSION_FILE_COL = "file_id"
 SUBMISSION_PRED_COL = "prediction"
 
-# ============================================================ 特征参数（初始值，待修订）
+# ============================================================ 特征参数
 WELCH_NPERSEG = 2048                 # 频率分辨率约 4.88 Hz
 WELCH_NOVERLAP = WELCH_NPERSEG // 2
 FREQ_BANDS_HZ = (
     (10, 50), (50, 100), (100, 200), (200, 400),
     (400, 800), (800, 1600), (1600, 3200), (3200, 5000),
 )
-# 波长域频带：lambda = v / f，用于消除车速对特征频率的影响
+# 波长域频带（半倍程，2-64 cm）：lambda = v / f，用于消除车速对特征频率的影响
 WAVELENGTH_BANDS_M = (
-    (0.02, 0.04), (0.04, 0.08), (0.08, 0.16), (0.16, 0.32), (0.32, 0.64),
+    (0.02, 0.0283), (0.0283, 0.04), (0.04, 0.0566), (0.0566, 0.08), (0.08, 0.1131),
+    (0.1131, 0.16), (0.16, 0.2263), (0.2263, 0.32), (0.32, 0.4525), (0.4525, 0.64),
 )
 MIN_SPEED_MPS = 1.0                  # 低于此车速时波长域特征视为无定义
 
-# 聚合统计量：mean / median / max / min / std，或 qXX 表示第 XX 百分位数
-AGG_STATS = ("mean", "median", "max", "std")        # 同侧 32 个轴箱上的聚合
-CONTRAST_STATS = ("mean", "median", "max")          # 两侧之差（本侧统计量 - 对侧统计量）
-PAIR_STATS = ("max", "min", "q90", "q10")           # 32 个轮对左右配对差值上的聚合
+# 聚合统计量：mean / median / max / min / std；qXX 为第 XX 百分位数；
+# topN / botN 为最大 / 最小 N 个值的均值
+AGG_STATS = ("mean", "median", "max", "std")                        # 同侧 32 个轴箱上的聚合
+CONTRAST_STATS = ("mean", "median", "max", "top3")                  # 两侧之差（本侧 - 对侧）
+PAIR_STATS = ("max", "min", "top3", "bot3", "q90", "q10")           # 32 个轮对左右配对差值上的聚合
+# 车厢级特征：每节车厢 4 个轮对左右差值的均值，再在 8 节车厢上聚合
+# adjmax / adjmin 为相邻两节车厢均值中的最大 / 最小值
+CAR_STATS = ("max", "top2", "min", "bot2", "adjmax", "adjmin")
+CAR_FEATURE_SETS = ("none", "invariant", "full")   # 不加 / 仅位置无关 / 位置无关 + 逐车厢
 
 # ============================================================ 建模参数
 LOW_SPEED_RULE_MPS = 1.0             # 低于此车速的文件直接判为 Normal，不进入模型
@@ -119,7 +125,9 @@ N_JOBS = -1
 
 
 def _valid_stat(s: str) -> bool:
-    return s in ("mean", "median", "max", "min", "std") or re.fullmatch(r"q\d{1,2}", s) is not None
+    return (s in ("mean", "median", "max", "min", "std")
+            or re.fullmatch(r"q\d{1,2}", s) is not None
+            or re.fullmatch(r"(top|bot)\d+", s) is not None)
 
 
 def _self_check() -> None:
@@ -133,6 +141,7 @@ def _self_check() -> None:
     assert all(a in SIDE_I_POSITIONS and b in SIDE_II_POSITIONS for a, b in AXLE_PAIRS)
     assert sorted(p for pair in AXLE_PAIRS for p in pair) == list(range(1, N_POSITIONS + 1))
     assert all(_valid_stat(s) for s in AGG_STATS + CONTRAST_STATS + PAIR_STATS)
+    assert all(lo < hi for lo, hi in WAVELENGTH_BANDS_M)
 
 
 if __name__ == "__main__":
